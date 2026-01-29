@@ -1,1 +1,160 @@
-console.log("Hello via Bun!");
+import express from "express";
+import { prisma } from "./db";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { CreateCourseSchema, LoginSchema, SignupSchema } from "./schemas";
+import { authMiddleware, errorHandler, requireRole } from "./middleware";
+
+
+
+const app = express();
+app.use(express.json());
+
+const SECRET = process.env.JWT_SECREAT!;
+
+// auth endpoints
+
+app.post("/auth/signup", async (req, res, next) => {
+    try{
+        const parsed  = SignupSchema.parse(req.body);
+        const hassedPassword = await bcrypt.hash(parsed.password, 10);
+
+        const user = await prisma.user.create({
+            data: {
+                email: parsed.email,
+                password: hassedPassword,
+                name: parsed.name,
+                role: parsed.role,
+            },
+        });
+
+        const token = jwt.sign({userId: user.id , role: user.role }, process.env.JWT_SECRET!);
+
+        res.json({message: "User created", userId: user.id});
+    }catch(error) {
+        res.status(403).json({error: "User already exists or invalid input"});
+    }
+});
+
+app.post("/auth/login", async (req, res, next) => {
+    try{
+        const { email, password } = LoginSchema.parse(req.body);
+        const user = await prisma.user.findUnique({where: {email}});
+
+        if(!user || !(await bcrypt.compare(password, user.password))) {
+            res.status(401).json({ error : "Invalid credentials"});
+            return;
+        }
+
+        const validPassword = await bcrypt.compare(password, user.password);
+        if(!validPassword){
+            res.status(403).json({error: "Invalid credentials"});
+            return;
+        }
+
+        const token = jwt.sign({userId: user.id , role: user.role }, process.env.JWT_SECRET!);
+        res.json({ token });
+    }catch(error) {
+        res.status(403).json({error : "Login failed"});
+    }
+});
+
+//course endpoints
+// create only INSTRUCTOR
+app.post("/courses", authMiddleware, requireRole("INSTRUCTOR"), async ( req, res, next) => {
+    try{
+        const parsed = CreateCourseSchema.parse(req.body);
+        const course = await prisma.course.create({
+            data: {
+                ...parsed,
+                instructorId:req.userId!,
+            },
+        });
+        res.json(course);
+    }catch(error){
+        next(error);
+    }
+});
+
+// get all courses
+app.get("/courses", async (req, res,next) => {
+    try{
+        const courses = await prisma.course.findMany();
+        res.json(courses);
+    }catch(error){
+        next(error);
+    }
+});
+
+// get course by id
+app.get("/courses/:id", async (req , res, next) => {
+    try{
+        const course = await prisma.course.findUnique({
+            where : { id : req.params.id },
+            include: { lessons: true },
+        });
+
+        if(!course){
+            res.status(404).json({error : "Course not found"});
+            return;
+        }
+
+        res.json(course);
+    }catch(error){
+        next(error);
+    }
+});
+
+// update course only INSTRUCTOR
+
+app.patch("/courses/:id", authMiddleware, requireRole("INSTRUCTOR"), async (req , res, next) => {
+    try{
+        const course = await prisma.course.findUnique({
+            where: { id: req.params.id as string }
+        });
+        if(!course || course.instructorId != req.userId){
+            res.status(403).json({error : "Not authorized to update the course"});
+            return;
+        }
+
+        const updated = await prisma.course.update({
+            where: {id : req.params.id as string},
+            data : req.body
+        });
+
+        res.json(updated);
+    }catch(error){
+        next(error);
+    }
+});
+
+// delete the course only INSTRUCTOR
+
+app.delete("/courses/:id", authMiddleware, requireRole("INSTRUCTOR"), async (req,res,next) =>{
+    try{
+        const course = await prisma.course.findUnique({
+            where: {id : req.params.id as string}
+        });
+
+        if(!course || course.instructorId != req.userId){
+            res.status(403).json({error : " Not authorized to delete this course"});
+            return;
+        }
+
+        await prisma.course.delete({
+            where : {id : req.params.id as string}
+        });
+        res.json({message : "Course deleted"});
+    }catch(error){
+        next(error);
+    }
+});
+
+
+app.use(errorHandler);
+
+const PORT = process.env.PORT!;
+app.listen(PORT, ()=> {
+    console.log(`Server runnning on port ${PORT}`);
+})
+
