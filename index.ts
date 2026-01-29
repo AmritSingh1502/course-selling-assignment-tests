@@ -2,7 +2,7 @@ import express from "express";
 import { prisma } from "./db";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { CreateCourseSchema, LoginSchema, SignupSchema } from "./schemas";
+import { CreateCourseSchema, CreateLessonSchema, LoginSchema, SignupSchema } from "./schemas";
 import { authMiddleware, errorHandler, requireRole } from "./middleware";
 
 
@@ -149,6 +149,48 @@ app.delete("/courses/:id", authMiddleware, requireRole("INSTRUCTOR"), async (req
         next(error);
     }
 });
+
+
+// lesson endpoints
+
+// only instructor of the course
+app.post("/lessons", authMiddleware, requireRole("INSTRUCTOR"), async (req, res,next) => {
+    try{
+        const parsed = CreateLessonSchema.parse(req.body);
+
+        const course = await prisma.course.findUnique({where: {id : parsed.courseId}});
+        if(!course || course.instructorId != req.userId) {
+            res.status(403).json({error : "You do not own this course"});
+            return;
+        }
+
+        const lesson = await prisma.lesson.create({
+            data: {
+                title: parsed.title,
+                content: parsed.content,
+                courseId: parsed.courseId
+            }
+        });
+        res.json(lesson);
+    }catch(error){
+        next(error);
+    }
+});
+
+
+// get the lesson
+app.get("/courses/:courseId/lessons", async (req, res, next) =>{
+    try{
+        const lessons = await prisma.lesson.findMany({
+            where: { courseId : req.params.courseId}
+        });
+        res.json(lessons);
+    }catch(error){
+        next(error);
+    }
+});
+
+
 
 
 app.use(errorHandler);
