@@ -2,7 +2,7 @@ import express from "express";
 import { prisma } from "./db";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { CreateCourseSchema, CreateLessonSchema, LoginSchema, SignupSchema } from "./schemas";
+import { CreateCourseSchema, CreateLessonSchema, LoginSchema, PurchaseCourseSchema, SignupSchema } from "./schemas";
 import { authMiddleware, errorHandler, requireRole } from "./middleware";
 
 
@@ -11,6 +11,28 @@ const app = express();
 app.use(express.json());
 
 const SECRET = process.env.JWT_SECREAT!;
+
+app.get("/me", authMiddleware, async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+    });
+
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // auth endpoints
 
@@ -30,9 +52,9 @@ app.post("/auth/signup", async (req, res, next) => {
 
         const token = jwt.sign({userId: user.id , role: user.role }, process.env.JWT_SECRET!);
 
-        res.json({message: "User created", userId: user.id});
+        res.json({message: "User created",token , id: user.id});
     }catch(error) {
-        res.status(403).json({error: "User already exists or invalid input"});
+        next(error);
     }
 });
 
@@ -53,11 +75,13 @@ app.post("/auth/login", async (req, res, next) => {
         }
 
         const token = jwt.sign({userId: user.id , role: user.role }, process.env.JWT_SECRET!);
-        res.json({ token });
+        res.json({ token , id: user.id});
     }catch(error) {
-        res.status(403).json({error : "Login failed"});
+        next(error);
     }
 });
+
+
 
 //course endpoints
 // create only INSTRUCTOR
@@ -190,6 +214,61 @@ app.get("/courses/:courseId/lessons", async (req, res, next) =>{
     }
 });
 
+
+// purchase endpoint
+
+app.post("/purchases", authMiddleware, requireRole("STUDENT"), async (req, res,next)=> {
+    try{
+        const { courseId } = PurchaseCourseSchema.parse(req.body);
+
+        const course = await prisma.course.findUnique({
+            where: {id: courseId}
+        });
+        if(!course){
+            res.status(404).json({error: "Course not found"});
+            return;
+        }
+
+        const existing = await prisma.purchase.findFirst({
+            where : { userId: req.userId!, courseId: courseId}
+        });
+
+        if(existing){
+            res.status(409).json({message: "Course already pruchased"});
+            return;
+        }
+
+        const purchase  = await prisma.purchase.create({
+            data: {
+                userId : req.userId!, courseId
+            }
+        });
+
+        res.json({message: "Course purchased successfully", purchaseId: purchase.id});
+
+    }catch (error){
+        next(error);
+    }
+});
+
+// get purchases courses for user
+app.get("/users/:id/purchases", authMiddleware, async (req, res, next) => {
+    try{
+        const { id } = req.params;
+        if(id !== req.userId){
+            res.status(403).json({error: "Access denied"});
+            return;
+        }
+
+        const purchases = await prisma.purchase.findMany({
+            where : {userId : id},
+            include : {course: true}
+        });
+        res.json(purchases);
+    }catch(error){
+        next(error);
+    }
+})
 
 
 
